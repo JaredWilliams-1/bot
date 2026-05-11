@@ -35,6 +35,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# HTTP server extras for the Slack bot integration.
+# Install with: pip install "claudia-memory[http]"
+http = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+]
 nlp = [
     "spacy>=3.7.0",
 ]

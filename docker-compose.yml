@@ -1,0 +1,151 @@
+###############################################################################
+# Claudia Docker Compose
+#
+# Three services:
+#   memory-daemon  - FastAPI HTTP wrapper for the memory MCP server (port 3850)
+#   slack-server   - Slack bot powered by @slack/bolt (port 3851)
+#   ollama         - Local embedding model server (port 11434)
+#
+# Usage:
+#   cp .env.example .env    # fill in all required values
+#   docker compose up -d
+#
+# Data persistence:
+#   claudia-data volume mounts to /home/claudia/.claudia in the memory-daemon
+#   container so your SQLite database survives container restarts.
+#
+# Ollama model setup (first run only):
+#   docker compose exec ollama ollama pull all-minilm:l6-v2
+###############################################################################
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Memory daemon: FastAPI HTTP wrapper for the claudia-memory MCP server
+  # ---------------------------------------------------------------------------
+  memory-daemon:
+    build:
+      context: ./memory-daemon
+      dockerfile: Dockerfile
+    image: claudia-memory-daemon:latest
+    container_name: claudia-memory-daemon
+    restart: unless-stopped
+    environment:
+      MEMORY_API_KEY: ${MEMORY_API_KEY}
+      OLLAMA_HOST: http://ollama:11434
+      # Optional: override the DB path inside the container
+      # CLAUDIA_DB_OVERRIDE: /home/claudia/.claudia/memory/claudia.db
+    env_file:
+      - .env
+    ports:
+      - "3850:3850"
+    volumes:
+      # Persist the SQLite database and file store across restarts
+      - claudia-data:/home/claudia/.claudia
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3850/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - claudia-net
+
+  # ---------------------------------------------------------------------------
+  # Slack bot: Bolt-powered bot that bridges Slack with Claude + memory
+  # ---------------------------------------------------------------------------
+  slack-server:
+    build:
+      context: ./slack
+      dockerfile: Dockerfile
+    image: claudia-slack-server:latest
+    container_name: claudia-slack-server
+    restart: unless-stopped
+    environment:
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      SLACK_SOCKET_MODE: ${SLACK_SOCKET_MODE:-false}
+      SLACK_PORT: ${SLACK_PORT:-3851}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-6}
+      MEMORY_API_URL: http://memory-daemon:3850
+      MEMORY_API_KEY: ${MEMORY_API_KEY}
+      MEMORY_RECALL_LIMIT: ${MEMORY_RECALL_LIMIT:-6}
+      MAX_TOKENS: ${MAX_TOKENS:-1024}
+      NODE_ENV: production
+    env_file:
+      - .env
+    ports:
+      - "${SLACK_PORT:-3851}:${SLACK_PORT:-3851}"
+    depends_on:
+      memory-daemon:
+        condition: service_healthy
+    healthcheck:
+      # In HTTP mode (default), the health endpoint runs on PORT+1 (3852).
+      # In Socket Mode, it runs on PORT (3851). The script handles both.
+      test: ["CMD", "node", "-e",
+        "const p = parseInt(process.env.SLACK_PORT||3851); const h = process.env.SLACK_SOCKET_MODE==='true' ? p : p+1; fetch('http://localhost:'+h+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - claudia-net
+
+  # ---------------------------------------------------------------------------
+  # Ollama: local embedding model server
+  # Provides all-minilm:l6-v2 embeddings (384 dim) for the memory daemon.
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: claudia-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - claudia-net
+    # Uncomment for GPU support (requires nvidia-docker):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+
+volumes:
+  claudia-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      # Bind-mount to ~/.claudia so the DB is readable from host Claude Code
+      # Change this path if your home directory is different.
+      device: "${CLAUDIA_DATA_DIR:-${HOME}/.claudia}"
+  ollama-models:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+
+networks:
+  claudia-net:
+    driver: bridge

@@ -1,0 +1,19 @@
+{
+  "name": "claudia-slack-bot",
+  "version": "1.0.0",
+  "description": "Claudia Slack integration: memory-aware AI assistant bot",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@slack/bolt": "^4.0.0",
+    "express": "^4.21.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

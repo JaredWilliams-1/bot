@@ -23,6 +23,7 @@ import { buildNeighborhoodGraph } from './lib/neighborhood.js';
 import { buildTraceGraph } from './lib/trace.js';
 import { searchGraph } from './lib/search.js';
 import { getActiveCommitments } from './lib/commitments.js';
+import { mountAuthRoutes, requireAuth } from './lib/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -60,6 +61,11 @@ let currentProjectDir = null;
 
 app.use(cors());
 app.use(express.json());
+
+// Mount auth routes BEFORE static files and before requireAuth is applied.
+// This ensures /api/auth/* endpoints are always reachable (unauthenticated).
+mountAuthRoutes(app);
+
 // Serve Vite build output (dist/) if it exists, fallback to public/ for styles
 import { existsSync } from 'fs';
 const distDir = join(__dirname, 'dist');
@@ -78,6 +84,10 @@ function safeCount(db, primaryQuery, fallbackQuery) {
     return db.prepare(fallbackQuery).get().c;
   }
 }
+
+// Apply auth to all /api/* routes. /health remains unauthenticated for
+// Docker/load-balancer probes. AUTH_DISABLED=true (default dev) passes through.
+app.use('/api', requireAuth);
 
 // ── Health ──────────────────────────────────────────────────────────
 
