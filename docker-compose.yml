@@ -1,9 +1,10 @@
 ###############################################################################
 # Claudia Docker Compose
 #
-# Three services:
+# Four services:
 #   memory-daemon  - FastAPI HTTP wrapper for the memory MCP server (port 3850)
 #   slack-server   - Slack bot powered by @slack/bolt (port 3851)
+#   visualizer     - 3D knowledge graph web UI (port 3849)
 #   ollama         - Local embedding model server (port 11434)
 #
 # Usage:
@@ -12,13 +13,11 @@
 #
 # Data persistence:
 #   claudia-data volume mounts to /home/claudia/.claudia in the memory-daemon
-#   container so your SQLite database survives container restarts.
+#   and visualizer containers so your SQLite database survives restarts.
 #
 # Ollama model setup (first run only):
 #   docker compose exec ollama ollama pull all-minilm:l6-v2
 ###############################################################################
-
-version: "3.9"
 
 services:
   # ---------------------------------------------------------------------------
@@ -98,6 +97,45 @@ services:
       - claudia-net
 
   # ---------------------------------------------------------------------------
+  # Visualizer: 3D knowledge graph explorer for Claudia's memory
+  # ---------------------------------------------------------------------------
+  visualizer:
+    build:
+      context: ./visualizer
+      dockerfile: Dockerfile
+    image: claudia-visualizer:latest
+    container_name: claudia-visualizer
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # Auth settings — set AUTH_DISABLED=false and supply credentials for production
+      AUTH_DISABLED: ${AUTH_DISABLED:-true}
+      AUTH_SECRET: ${AUTH_SECRET:-}
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+      APP_URL: ${APP_URL:-http://localhost:3849}
+      JWT_EXPIRY_SECONDS: ${JWT_EXPIRY_SECONDS:-86400}
+    env_file:
+      - .env
+    ports:
+      - "3849:3849"
+    volumes:
+      # Read-only access to the SQLite database (same volume as memory-daemon)
+      - claudia-data:/home/claudia/.claudia:ro
+    depends_on:
+      memory-daemon:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e",
+        "fetch('http://localhost:3849/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - claudia-net
+
+  # ---------------------------------------------------------------------------
   # Ollama: local embedding model server
   # Provides all-minilm:l6-v2 embeddings (384 dim) for the memory daemon.
   # ---------------------------------------------------------------------------
@@ -110,9 +148,10 @@ services:
     ports:
       - "11434:11434"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      # Ollama's image has no curl; use the built-in ollama CLI to ping the API.
+      test: ["CMD", "ollama", "list"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 5
       start_period: 30s
     networks:
