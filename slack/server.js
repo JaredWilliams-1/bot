@@ -24,6 +24,7 @@ import {
   USE_SOCKET_MODE,
   PORT,
 } from './config.js';
+import 'dotenv/config';
 
 // ---------------------------------------------------------------------------
 // Bolt app setup
