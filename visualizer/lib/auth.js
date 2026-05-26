@@ -21,33 +21,6 @@
 
 import crypto from 'crypto';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const CONFIG_PATH = join(__dirname, '..', 'auth-config.json');
-
-// ---------------------------------------------------------------------------
-// Persisted config (written by the setup UI)
-// ---------------------------------------------------------------------------
-
-function loadPersistedConfig() {
-  if (!existsSync(CONFIG_PATH)) return {};
-  try {
-    return JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-export function savePersistedConfig(update) {
-  const current = loadPersistedConfig();
-  const next = { ...current, ...update };
-  writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), 'utf8');
-  return next;
-}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -55,23 +28,11 @@ export function savePersistedConfig(update) {
 
 const AUTH_DISABLED = process.env.AUTH_DISABLED === 'true';
 const AUTH_SECRET = process.env.AUTH_SECRET || generateDevSecret();
+const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID || '';
+const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || '';
 const APP_URL = process.env.APP_URL || 'http://localhost:3849';
 const JWT_EXPIRY_SECONDS = parseInt(process.env.JWT_EXPIRY_SECONDS || '86400', 10); // 24 h
 const COOKIE_NAME = 'claudia_session';
-
-// Credentials: env vars take precedence, then persisted config file
-function getSlackCredentials() {
-  const persisted = loadPersistedConfig();
-  return {
-    clientId: process.env.SLACK_CLIENT_ID || persisted.slackClientId || '',
-    clientSecret: process.env.SLACK_CLIENT_SECRET || persisted.slackClientSecret || '',
-  };
-}
-
-export function isSlackConfigured() {
-  const { clientId, clientSecret } = getSlackCredentials();
-  return !!(clientId && clientSecret);
-}
 
 function generateDevSecret() {
   const secret = crypto.randomBytes(32).toString('hex');
@@ -217,14 +178,13 @@ const SLACK_SCOPES = ['identity.basic', 'identity.email'].join(',');
  * State is a HMAC of a timestamp to prevent CSRF.
  */
 export function buildSlackAuthUrl() {
-  const { clientId } = getSlackCredentials();
   const state = createHmac('sha256', AUTH_SECRET)
     .update(String(Date.now()))
     .digest('hex')
     .slice(0, 16);
 
   const params = new URLSearchParams({
-    client_id: clientId,
+    client_id: SLACK_CLIENT_ID,
     scope: SLACK_SCOPES,
     redirect_uri: `${APP_URL}/api/auth/slack/callback`,
     state,
@@ -238,14 +198,13 @@ export function buildSlackAuthUrl() {
  * Returns { userId, name, email } or throws on failure.
  */
 export async function exchangeSlackCode(code) {
-  const { clientId, clientSecret } = getSlackCredentials();
-  if (!clientId || !clientSecret) {
+  if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
     throw new Error('SLACK_CLIENT_ID and SLACK_CLIENT_SECRET must be set for Slack OAuth');
   }
 
   const params = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
+    client_id: SLACK_CLIENT_ID,
+    client_secret: SLACK_CLIENT_SECRET,
     code,
     redirect_uri: `${APP_URL}/api/auth/slack/callback`,
   });
@@ -296,41 +255,15 @@ export function mountAuthRoutes(app) {
     next();
   });
 
-  // POST /api/auth/setup - Save Slack credentials via the UI (no restart needed)
-  app.post('/api/auth/setup', (req, res) => {
-    if (AUTH_DISABLED) {
-      return res.json({ success: true, message: 'Auth is disabled; no setup needed.' });
-    }
-    const { slackClientId, slackClientSecret } = req.body;
-    if (!slackClientId || !slackClientSecret) {
-      return res.status(400).json({ error: 'slackClientId and slackClientSecret are required' });
-    }
-    try {
-      savePersistedConfig({ slackClientId, slackClientSecret });
-      res.json({ success: true, message: 'Slack credentials saved. You can now sign in.' });
-    } catch (err) {
-      res.status(500).json({ error: `Failed to save config: ${err.message}` });
-    }
-  });
-
-  // GET /api/auth/status - Let the frontend know if Slack is configured
-  app.get('/api/auth/status', (_req, res) => {
-    res.json({
-      authDisabled: AUTH_DISABLED,
-      slackConfigured: AUTH_DISABLED || isSlackConfigured(),
-    });
-  });
-
   // GET /api/auth/slack - Initiate Slack OAuth flow
   app.get('/api/auth/slack', (_req, res) => {
     if (AUTH_DISABLED) {
       return res.redirect('/');
     }
-    if (!isSlackConfigured()) {
+    if (!SLACK_CLIENT_ID) {
       return res.status(503).json({
         error: 'Slack OAuth not configured',
-        hint: 'Use the setup form to enter your Slack Client ID and Secret.',
-        setupRequired: true,
+        hint: 'Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET in .env',
       });
     }
     res.redirect(buildSlackAuthUrl());

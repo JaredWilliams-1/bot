@@ -2,8 +2,8 @@
  * Login page component.
  *
  * Shown when the user is not authenticated. Offers Slack OAuth SSO.
- * If Slack credentials haven't been configured yet, shows a setup form
- * so the user can enter them without touching .env.
+ * Polls /api/auth/me to check session state and calls onAuthenticated()
+ * when login is confirmed.
  */
 
 import { useEffect, useState } from 'react';
@@ -14,38 +14,35 @@ import { useEffect, useState } from 'react';
  */
 export function Login({ onAuthenticated }) {
   const [checking, setChecking] = useState(true);
-  const [status, setStatus] = useState(null); // { authDisabled, slackConfigured }
   const [error, setError] = useState(null);
 
+  // On mount, check if we already have a valid session (e.g. page reload
+  // after a cookie was set by the OAuth callback).
   useEffect(() => {
     let cancelled = false;
 
-    async function init() {
+    async function checkSession() {
       try {
-        // Check if we already have a valid session
-        const meRes = await fetch('/api/auth/me');
-        if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-        const meData = await meRes.json();
-        if (!cancelled && meData.authenticated) {
-          onAuthenticated(meData.user);
-          return;
+        const res = await fetch('/api/auth/me');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!cancelled && data.authenticated) {
+          onAuthenticated(data.user);
         }
-
-        // Check auth configuration status
-        const statusRes = await fetch('/api/auth/status');
-        if (!statusRes.ok) throw new Error(`HTTP ${statusRes.status}`);
-        const statusData = await statusRes.json();
-        if (!cancelled) setStatus(statusData);
       } catch (err) {
-        if (!cancelled) setError('Could not reach the server.');
+        if (!cancelled) setError('Could not check session status.');
       } finally {
         if (!cancelled) setChecking(false);
       }
     }
 
-    init();
+    checkSession();
     return () => { cancelled = true; };
   }, [onAuthenticated]);
+
+  function handleSlackLogin() {
+    window.location.href = '/api/auth/slack';
+  }
 
   if (checking) {
     return (
@@ -58,12 +55,6 @@ export function Login({ onAuthenticated }) {
     );
   }
 
-  // Need to configure Slack first
-  if (status && !status.slackConfigured) {
-    return <SetupForm onConfigured={() => setStatus(s => ({ ...s, slackConfigured: true }))} />;
-  }
-
-  // Slack is configured (or auth disabled) - show normal login
   return (
     <div className="login-page">
       <div className="login-card">
@@ -75,7 +66,7 @@ export function Login({ onAuthenticated }) {
 
         {error && <p className="login-error">{error}</p>}
 
-        <button className="login-btn login-btn--slack" onClick={() => { window.location.href = '/api/auth/slack'; }}>
+        <button className="login-btn login-btn--slack" onClick={handleSlackLogin}>
           <SlackIcon />
           Sign in with Slack
         </button>
@@ -83,103 +74,6 @@ export function Login({ onAuthenticated }) {
         <p className="login-note">
           Your memory data stays on your machine. Slack is used for identity only.
         </p>
-      </div>
-
-      <style>{LOGIN_STYLES}</style>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Setup form - collect Slack credentials once, persisted server-side
-// ---------------------------------------------------------------------------
-
-function SetupForm({ onConfigured }) {
-  const [clientId, setClientId] = useState('');
-  const [clientSecret, setClientSecret] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [showSecret, setShowSecret] = useState(false);
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!clientId.trim() || !clientSecret.trim()) {
-      setError('Both fields are required.');
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/auth/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slackClientId: clientId.trim(), slackClientSecret: clientSecret.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Setup failed');
-      onConfigured();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="login-page">
-      <div className="login-card login-card--wide">
-        <LoginLogo />
-        <h1 className="login-title">Connect Slack</h1>
-        <p className="login-subtitle">
-          Enter your Slack app credentials once. They'll be saved locally so you don't need to edit any files.
-        </p>
-
-        <div className="setup-help">
-          <strong>Where to find these:</strong>
-          <ol>
-            <li>Go to <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer">api.slack.com/apps</a></li>
-            <li>Create or select your app</li>
-            <li>Under <em>Basic Information</em> → <em>App Credentials</em></li>
-            <li>Also add <code>http://localhost:3849/api/auth/slack/callback</code> to <em>OAuth &amp; Permissions → Redirect URLs</em></li>
-          </ol>
-        </div>
-
-        {error && <p className="login-error">{error}</p>}
-
-        <form onSubmit={handleSubmit} className="setup-form">
-          <label className="setup-field">
-            <span>Client ID</span>
-            <input
-              type="text"
-              value={clientId}
-              onChange={e => setClientId(e.target.value)}
-              placeholder="1234567890.123456789012"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-
-          <label className="setup-field">
-            <span>Client Secret</span>
-            <div className="secret-input-wrap">
-              <input
-                type={showSecret ? 'text' : 'password'}
-                value={clientSecret}
-                onChange={e => setClientSecret(e.target.value)}
-                placeholder="••••••••••••••••••••••••••••••••"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <button type="button" className="secret-toggle" onClick={() => setShowSecret(v => !v)}>
-                {showSecret ? 'Hide' : 'Show'}
-              </button>
-            </div>
-          </label>
-
-          <button className="login-btn login-btn--primary" type="submit" disabled={saving}>
-            {saving ? 'Saving...' : 'Save & Continue'}
-          </button>
-        </form>
       </div>
 
       <style>{LOGIN_STYLES}</style>
@@ -252,21 +146,6 @@ const LOGIN_STYLES = `
     box-shadow: 0 8px 32px rgba(0,0,0,0.4);
   }
 
-  .login-card--wide {
-    max-width: 520px;
-    text-align: left;
-  }
-
-  .login-card--wide .login-logo {
-    display: block;
-    text-align: left;
-  }
-
-  .login-card--wide .login-title,
-  .login-card--wide .login-subtitle {
-    text-align: left;
-  }
-
   .login-logo {
     font-size: 11px;
     line-height: 1.3;
@@ -291,102 +170,6 @@ const LOGIN_STYLES = `
     line-height: 1.5;
   }
 
-  .setup-help {
-    font-size: 13px;
-    color: #8b949e;
-    background: #0d1117;
-    border: 1px solid #21262d;
-    border-radius: 8px;
-    padding: 14px 16px;
-    margin-bottom: 24px;
-    line-height: 1.6;
-  }
-
-  .setup-help strong {
-    color: #c9d1d9;
-    display: block;
-    margin-bottom: 6px;
-  }
-
-  .setup-help ol {
-    margin: 0;
-    padding-left: 18px;
-  }
-
-  .setup-help a {
-    color: #58a6ff;
-    text-decoration: none;
-  }
-
-  .setup-help a:hover { text-decoration: underline; }
-
-  .setup-help code {
-    background: #21262d;
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-size: 12px;
-    word-break: break-all;
-  }
-
-  .setup-form {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .setup-field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .setup-field span {
-    font-size: 13px;
-    font-weight: 500;
-    color: #c9d1d9;
-  }
-
-  .setup-field input {
-    background: #0d1117;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    color: #e6edf3;
-    font-size: 14px;
-    padding: 9px 12px;
-    width: 100%;
-    box-sizing: border-box;
-    outline: none;
-    transition: border-color 0.15s;
-  }
-
-  .setup-field input:focus {
-    border-color: #58a6ff;
-  }
-
-  .secret-input-wrap {
-    position: relative;
-    display: flex;
-  }
-
-  .secret-input-wrap input {
-    padding-right: 56px;
-  }
-
-  .secret-toggle {
-    position: absolute;
-    right: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    background: none;
-    border: none;
-    color: #58a6ff;
-    font-size: 12px;
-    cursor: pointer;
-    padding: 2px 4px;
-  }
-
-  .secret-toggle:hover { text-decoration: underline; }
-
   .login-btn {
     display: inline-flex;
     align-items: center;
@@ -409,13 +192,6 @@ const LOGIN_STYLES = `
   .login-btn--slack {
     background: #fff;
     color: #1d1c1d;
-  }
-
-  .login-btn--primary {
-    background: #238636;
-    color: #fff;
-    margin-top: 8px;
-    margin-bottom: 0;
   }
 
   .login-status {

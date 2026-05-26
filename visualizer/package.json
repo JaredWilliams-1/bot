@@ -19,6 +19,7 @@
     "better-sqlite3": "^11.0.0",
     "cors": "^2.8.5",
     "d3-force-3d": "^3.0.6",
+    "dotenv": "^17.4.2",
     "express": "^4.21.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
