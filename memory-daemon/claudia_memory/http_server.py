@@ -1,4 +1,4 @@
-"""
+﻿"""
 FastAPI HTTP wrapper for the Claudia Memory Daemon.
 
 Exposes the core memory tools (remember, recall, about, relate, briefing)
@@ -270,10 +270,8 @@ async def memory_briefing(body: BriefingRequest):
     """
     try:
         with _db_manager.db_context(body.user_id):
-            from .database import _db_instance_for_path  # type: ignore
-            # Clear the global singleton so get_db() returns the per-user DB.
-            from . import database as _db_mod
-            _db_mod._db = None  # type: ignore[attr-defined]
+            from .database import reset_db
+            reset_db() 
 
             from .mcp.server import _build_briefing
             briefing_text = _build_briefing()
@@ -292,3 +290,5 @@ async def memory_briefing(body: BriefingRequest):
 @app.on_event("shutdown")
 async def on_shutdown():
     _db_manager.close_all()
+
+
