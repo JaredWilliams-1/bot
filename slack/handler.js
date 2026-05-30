@@ -157,6 +157,10 @@ async function callClaude(messages) {
         text: SYSTEM_PROMPT,
         cache_control: { type: 'ephemeral' }, // Cache stable system prompt
       },
+      {
+        type: 'text',
+        text: `Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}.`,
+      },
     ],
     messages,
   });
