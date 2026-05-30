@@ -29,3 +29,5 @@ htmlcov/
 *.db
 *.db-wal
 *.db-shm
+
+.python-version
