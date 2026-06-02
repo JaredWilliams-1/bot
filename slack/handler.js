@@ -200,6 +200,55 @@ async function storeExchange({ text, replyText, userId, username }) {
     importance: 0.4,
     entities: [username],
   });
+
+  // Extract and store discrete facts from the exchange at high importance
+  extractAndStoreFacts({ text, replyText, userId, username }).catch((err) => {
+    console.warn('[handler] Fact extraction failed:', err.message);
+  });
+}
+
+/**
+ * Use a fast Claude call to pull structured facts out of a user/assistant exchange
+ * and store them as high-importance 'fact' memories so they survive recall ranking.
+ */
+async function extractAndStoreFacts({ text, replyText, userId, username }) {
+  const extractionPrompt = `Extract discrete, standalone facts from this conversation exchange. Only extract facts that are clearly stated and would be useful to remember (names, relationships, meeting times, dates, preferences, corrections). Return a JSON array of strings, one fact per item. Return an empty array [] if there are nothing worth extracting.
+
+User said: ${text}
+Assistant replied: ${replyText}
+
+Return only a JSON array, no other text.`;
+
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 256,
+    messages: [{ role: 'user', content: extractionPrompt }],
+  });
+
+  const block = response.content.find((b) => b.type === 'text');
+  if (!block) return;
+
+  let facts;
+  try {
+    facts = JSON.parse(block.text.trim());
+  } catch {
+    return;
+  }
+
+  if (!Array.isArray(facts) || facts.length === 0) return;
+
+  for (const fact of facts) {
+    if (typeof fact !== 'string' || !fact.trim()) continue;
+    await memory.remember({
+      content: fact.trim(),
+      userId,
+      type: 'fact',
+      importance: 0.85,
+      entities: [username],
+    });
+  }
+
+  console.log(`[handler] Extracted ${facts.length} fact(s) from exchange for ${username}`);
 }
 
 // ---------------------------------------------------------------------------

@@ -77,4 +77,4 @@ export const USE_SOCKET_MODE = optional('SLACK_SOCKET_MODE', 'false') === 'true'
 export const MAX_TOKENS = parseInt(optional('MAX_TOKENS', '1024'), 10);
 
 /** Number of past memories to inject as context */
-export const MEMORY_RECALL_LIMIT = parseInt(optional('MEMORY_RECALL_LIMIT', '6'), 10);
+export const MEMORY_RECALL_LIMIT = parseInt(optional('MEMORY_RECALL_LIMIT', '15'), 10);

@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node --env-file=../.env server.js",
     "dev": "node --env-file=../.env --watch server.js",
-    "start:memory": "node --env-file=../.env start-memory.js"
+    "start:memory": "node --env-file=../.env start-memory.js",
+    "dev:all": "node --env-file=../.env start-memory.js & node --env-file=../.env --watch server.js; kill 0",
+    "setup": "node setup.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
