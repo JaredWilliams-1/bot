@@ -22,6 +22,7 @@ import {
   MEMORY_RECALL_LIMIT,
 } from './config.js';
 import * as memory from './memory-client.js';
+import { buildCalendarContext } from './calendar-client.js';
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
@@ -84,9 +85,10 @@ export async function handleMessage({ text, userId, username, channelId, threadT
  */
 async function buildMemoryContext({ text, userId, username }) {
   try {
-    const [recallResult, briefingResult] = await Promise.allSettled([
+    const [recallResult, briefingResult, calendarContext] = await Promise.allSettled([
       memory.recall({ query: text, userId, limit: MEMORY_RECALL_LIMIT }),
       memory.briefing({ userId }),
+      buildCalendarContext(),
     ]);
 
     const lines = [];
@@ -95,6 +97,10 @@ async function buildMemoryContext({ text, userId, username }) {
       lines.push('## Session Briefing');
       lines.push(briefingResult.value.briefing);
       lines.push('');
+    }
+
+    if (calendarContext.status === 'fulfilled' && calendarContext.value) {
+      lines.push(calendarContext.value);
     }
 
     if (recallResult.status === 'fulfilled' && recallResult.value?.results?.length > 0) {
