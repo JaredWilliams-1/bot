@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Claudia Slack Message Handler
  *
  * Core request/response pipeline:
@@ -22,10 +22,33 @@ import {
   MEMORY_RECALL_LIMIT,
 } from './config.js';
 import * as memory from './memory-client.js';
-import { buildCalendarContext } from './calendar-client.js';
+import { buildCalendarContext, createEvent, isCalendarConfigured } from './calendar-client.js';
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
+
+// ---------------------------------------------------------------------------
+// Calendar tool definition
+// ---------------------------------------------------------------------------
+
+const CALENDAR_TOOLS = [
+  {
+    name: 'create_calendar_event',
+    description: "Create a new event on the user's Google Calendar. Use this when the user asks to schedule, add, book, or create a meeting, appointment, or event.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Event title or summary' },
+        start_datetime: { type: 'string', description: 'Start date and time in ISO 8601 format (e.g. 2026-06-08T14:00:00). Resolve relative dates like "tomorrow" or "Friday" using the current date.' },
+        end_datetime: { type: 'string', description: 'End date and time in ISO 8601 format. Defaults to 1 hour after start if not provided.' },
+        attendees: { type: 'array', items: { type: 'string' }, description: 'List of attendee email addresses (optional)' },
+        description: { type: 'string', description: 'Event description or agenda (optional)' },
+        location: { type: 'string', description: 'Event location or video call link (optional)' },
+      },
+      required: ['title', 'start_datetime'],
+    },
+  },
+];
 // ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
@@ -154,26 +177,73 @@ function buildMessages({ text, username, context }) {
  * repeated interactions (system prompt is stable across requests).
  */
 async function callClaude(messages) {
+  const system = [
+    {
+      type: "text",
+      text: SYSTEM_PROMPT,
+      cache_control: { type: "ephemeral" },
+    },
+    {
+      type: "text",
+      text: `Today's date is ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}.`,
+    },
+  ];
+
+  const tools = isCalendarConfigured() ? CALENDAR_TOOLS : [];
+  const toolOptions = tools.length > 0 ? { tools, tool_choice: { type: "auto" } } : {};
+
   const response = await anthropic.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: MAX_TOKENS,
-    system: [
-      {
-        type: 'text',
-        text: SYSTEM_PROMPT,
-        cache_control: { type: 'ephemeral' }, // Cache stable system prompt
-      },
-      {
-        type: 'text',
-        text: `Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}.`,
-      },
-    ],
+    system,
     messages,
+    ...toolOptions,
   });
 
-  const block = response.content.find((b) => b.type === 'text');
-  if (!block) throw new Error('No text block in Claude response');
+  if (response.stop_reason === "tool_use") {
+    const toolUseBlocks = response.content.filter((b) => b.type === "tool_use");
+    const toolResults = await Promise.all(
+      toolUseBlocks.map(async (toolUse) => ({
+        type: "tool_result",
+        tool_use_id: toolUse.id,
+        content: JSON.stringify(await dispatchTool(toolUse.name, toolUse.input)),
+      }))
+    );
+
+    const continued = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: MAX_TOKENS,
+      system,
+      messages: [
+        ...messages,
+        { role: "assistant", content: response.content },
+        { role: "user", content: toolResults },
+      ],
+      ...toolOptions,
+    });
+
+    const block = continued.content.find((b) => b.type === "text");
+    if (!block) throw new Error("No text block in Claude follow-up response");
+    return block.text;
+  }
+
+  const block = response.content.find((b) => b.type === "text");
+  if (!block) throw new Error("No text block in Claude response");
   return block.text;
+}
+
+async function dispatchTool(name, input) {
+  if (name === "create_calendar_event") {
+    try {
+      const event = await createEvent(input);
+      console.log("[handler] Calendar event created:", event.summary);
+      return { success: true, event };
+    } catch (err) {
+      console.error("[handler] Failed to create calendar event:", err.message);
+      return { success: false, error: err.message };
+    }
+  }
+  return { error: "Unknown tool: " + name };
 }
 
 // ---------------------------------------------------------------------------
@@ -295,3 +365,4 @@ export async function detectAndStoreCommitment({ text, userId, username }) {
     console.warn('[handler] Could not store commitment:', err.message);
   }
 }
+

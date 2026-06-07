@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Google Calendar Client
  *
  * Fetches upcoming events for the authenticated user and formats them
@@ -107,7 +107,7 @@ export async function authorize() {
   const oauth2Client = createOAuthClient();
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: ['https://www.googleapis.com/auth/calendar.readonly'],
+    scope: ['https://www.googleapis.com/auth/calendar'],
     prompt: 'consent',
   });
 
@@ -248,6 +248,51 @@ export function isCalendarConfigured() {
   return isConfigured() && existsSync(TOKEN_PATH);
 }
 
+
+// ---------------------------------------------------------------------------
+// Event creation
+// ---------------------------------------------------------------------------
+
+export async function createEvent({ title, start_datetime, end_datetime, attendees = [], description, location }) {
+  const auth = await getAuthClient();
+  if (!auth) throw new Error('Google Calendar not authorized. Run: node calendar-client.js --auth');
+
+  const calendar = google.calendar({ version: 'v3', auth });
+
+  const startDt = new Date(start_datetime);
+  const endDt = end_datetime
+    ? new Date(end_datetime)
+    : new Date(startDt.getTime() + 60 * 60 * 1000);
+
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  const eventBody = {
+    summary: title,
+    start: { dateTime: startDt.toISOString(), timeZone },
+    end: { dateTime: endDt.toISOString(), timeZone },
+  };
+
+  if (description) eventBody.description = description;
+  if (location) eventBody.location = location;
+  if (attendees.length > 0) {
+    eventBody.attendees = attendees.map((email) => ({ email }));
+  }
+
+  const response = await calendar.events.insert({
+    calendarId: 'primary',
+    resource: eventBody,
+    sendUpdates: attendees.length > 0 ? 'all' : 'none',
+  });
+
+  console.log(`[calendar] Event created: ${response.data.summary}`);
+  return {
+    id: response.data.id,
+    htmlLink: response.data.htmlLink,
+    summary: response.data.summary,
+    start: response.data.start,
+    end: response.data.end,
+  };
+}
 // ---------------------------------------------------------------------------
 // CLI: node calendar-client.js --auth
 // ---------------------------------------------------------------------------
@@ -258,3 +303,4 @@ if (process.argv[1].endsWith('calendar-client.js') && process.argv.includes('--a
     process.exit(1);
   });
 }
+
