@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "claudia-slack-bot",
   "version": "1.0.0",
   "description": "Claudia Slack integration: memory-aware AI assistant bot",
@@ -8,7 +8,7 @@
     "start": "node --env-file=../.env server.js",
     "dev": "node --env-file=../.env --watch server.js",
     "start:memory": "node --env-file=../.env start-memory.js",
-    "dev:all": "node --env-file=../.env start-memory.js & node --env-file=../.env --watch server.js; kill 0",
+    "dev:all": "concurrently \"npm run start:memory\" \"npm run dev\"",
     "setup": "node setup.js"
   },
   "dependencies": {
@@ -20,5 +20,9 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
   }
 }
+
