@@ -297,7 +297,7 @@ export async function createEvent({ title, start_datetime, end_datetime, attende
 // CLI: node calendar-client.js --auth
 // ---------------------------------------------------------------------------
 
-if (process.argv[1].endsWith('calendar-client.js') && process.argv.includes('--auth')) {
+if (process.argv[1]?.endsWith('calendar-client.js') && process.argv.includes('--auth')) {
   authorize().catch((err) => {
     console.error('Authorization failed:', err.message);
     process.exit(1);
