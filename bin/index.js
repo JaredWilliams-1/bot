@@ -8,6 +8,15 @@ import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { setupGoogleWorkspace, detectOldGoogleMcp, extractProjectNumber, buildApiEnableUrl, TIER_APIS } from './google-setup.js';
 import {
+  REQUIRED_SECRETS,
+  validateSecret,
+  buildEnvContent,
+  checkDocker,
+  findManifest,
+  readExistingEnv,
+  writeEnv,
+} from './slack-setup.js';
+import {
   loadManifest,
   generateManifest,
   detectConflicts,
@@ -737,6 +746,15 @@ async function checkForNewerVersion(currentVersion) {
 async function main() {
   const version = getVersion();
 
+  // Self-hosting subcommands run the local source tree directly. They must NOT
+  // trampoline to the published npm package: a cloned repo's local edits and its
+  // docker-compose stack live here, not in whatever get-claudia@latest ships.
+  const earlyArg = process.argv.slice(2).find((a) => !a.startsWith('-'));
+  if (earlyArg === 'slack') {
+    await runSlackSetup();
+    process.exit(0);
+  }
+
   // Self-update trampoline: re-exec with latest if we're stale
   const newerVersion = await checkForNewerVersion(version);
   if (newerVersion) {
@@ -778,6 +796,9 @@ async function main() {
     await runGoogleSetup();
     process.exit(0);
   }
+
+  // Note: the `slack` subcommand is handled earlier in main(), before the
+  // self-update trampoline, so it always runs from the local source tree.
 
   // Support "." or "upgrade" for current directory
   const isCurrentDir = arg === '.' || arg === 'upgrade';
@@ -2284,6 +2305,175 @@ async function runGoogleSetup() {
   console.log(`      ${colors.dim}(delete ~/.workspace-mcp/token.json and restart Claude Code)${colors.reset}`);
   console.log('');
   console.log(` ${colors.dim}Try: "check my inbox", "what's on my calendar", "search my Drive for..."${colors.reset}`);
+  console.log('');
+}
+
+/**
+ * Run a Docker container with stdout/stderr inherited so the user sees progress.
+ * Resolves on exit code 0, rejects otherwise.
+ */
+function runStreaming(cmd, args, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd, stdio: 'inherit' });
+    child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`${cmd} exited with code ${code}`)));
+    child.on('error', reject);
+  });
+}
+
+async function runSlackSetup() {
+  const targetPath = process.cwd();
+
+  console.log('');
+  console.log(` ${colors.boldCyan}Claudia Slack Bot Setup${colors.reset}`);
+  console.log(` ${colors.dim}Self-host the full stack with Docker: bot, memory, embeddings, visualizer${colors.reset}`);
+  console.log('');
+
+  // 1. Docker is the only host prerequisite.
+  const docker = await checkDocker();
+  if (!docker.installed) {
+    console.log(` ${colors.red}!${colors.reset}  Docker is not installed.`);
+    console.log(`   Install Docker Desktop: ${colors.cyan}https://www.docker.com/products/docker-desktop${colors.reset}`);
+    process.exit(1);
+  }
+  if (!docker.running) {
+    console.log(` ${colors.red}!${colors.reset}  Docker is installed but not running. Start Docker Desktop and re-run.`);
+    process.exit(1);
+  }
+  console.log(` ${colors.cyan}✓${colors.reset} Docker is installed and running`);
+  console.log('');
+
+  // 2. Confirm the docker-compose stack is present.
+  if (!existsSync(join(targetPath, 'docker-compose.yml'))) {
+    console.log(` ${colors.red}!${colors.reset}  No docker-compose.yml found in the current directory.`);
+    console.log(`   ${colors.dim}Run this from the Claudia project root.${colors.reset}`);
+    process.exit(1);
+  }
+
+  // 3. Walk through Slack app creation via the manifest.
+  const manifestPath = findManifest(__dirname);
+  console.log(` ${colors.boldYellow}Step 1: Create your Slack app${colors.reset}`);
+  console.log('');
+  console.log(`   1. Open ${colors.cyan}https://api.slack.com/apps${colors.reset}`);
+  console.log(`   2. Click ${colors.bold}"Create New App"${colors.reset} → ${colors.bold}"From an app manifest"${colors.reset}`);
+  console.log(`   3. Pick your workspace, switch the dialog to ${colors.bold}YAML${colors.reset}, and paste this file:`);
+  if (manifestPath) {
+    console.log(`      ${colors.cyan}${manifestPath}${colors.reset}`);
+  } else {
+    console.log(`      ${colors.yellow}(manifest file not found; create the app manually)${colors.reset}`);
+  }
+  console.log(`   4. Click ${colors.bold}"Create"${colors.reset}, then ${colors.bold}"Install to Workspace"${colors.reset}`);
+  console.log('');
+  await prompt(`${colors.dim}Press Enter once the app is installed...${colors.reset}`);
+
+  // 4. Collect the secrets that cannot be auto-generated.
+  console.log('');
+  console.log(` ${colors.boldYellow}Step 2: Paste your tokens${colors.reset}`);
+  console.log(` ${colors.dim}From the Slack app pages (OAuth & Permissions, Basic Information)${colors.reset}`);
+  console.log('');
+
+  const hints = {
+    SLACK_BOT_TOKEN: 'Bot User OAuth Token (xoxb-...)',
+    SLACK_APP_TOKEN: 'App-Level Token with connections:write (xapp-...)',
+    SLACK_SIGNING_SECRET: 'Signing Secret',
+    ANTHROPIC_API_KEY: 'Anthropic API key (sk-ant-...) from console.anthropic.com',
+  };
+
+  const secrets = {};
+  for (const name of REQUIRED_SECRETS) {
+    let value = '';
+    // Allow one retry on a bad value rather than aborting the whole flow.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      value = await prompt(`${colors.cyan}${name}${colors.reset} ${colors.dim}(${hints[name]}):${colors.reset}`);
+      const err = validateSecret(name, value);
+      if (!err) break;
+      console.log(` ${colors.red}!${colors.reset}  ${err}`);
+      if (attempt === 1) {
+        console.log(` ${colors.red}!${colors.reset}  Giving up on ${name}. Re-run "get-claudia slack" when ready.`);
+        process.exit(1);
+      }
+    }
+    secrets[name] = value.trim();
+  }
+
+  // 5. Optional Google Calendar.
+  let calendar = null;
+  console.log('');
+  const wantCalendar = await confirm('Connect Google Calendar now? (optional, can skip)');
+  if (wantCalendar) {
+    console.log(` ${colors.dim}Create a Desktop OAuth client: https://console.cloud.google.com/apis/credentials${colors.reset}`);
+    console.log(` ${colors.dim}Enable the Google Calendar API for that project too.${colors.reset}`);
+    const clientId = await prompt(`${colors.cyan}GOOGLE_CLIENT_ID:${colors.reset}`);
+    const clientSecret = await prompt(`${colors.cyan}GOOGLE_CLIENT_SECRET:${colors.reset}`);
+    if (clientId && clientSecret) {
+      calendar = { clientId: clientId.trim(), clientSecret: clientSecret.trim() };
+    } else {
+      console.log(` ${colors.yellow}○${colors.reset} Skipping calendar (missing credentials). You can add it to .env later.`);
+    }
+  } else {
+    console.log(` ${colors.dim}Skipping calendar. The bot works fully without it.${colors.reset}`);
+  }
+
+  // 6. Write .env, preserving previously generated keys.
+  const existing = readExistingEnv(targetPath);
+  if (Object.keys(existing).length > 0) {
+    const overwrite = await confirm('An .env already exists. Overwrite it? (generated keys are preserved)');
+    if (!overwrite) {
+      console.log(` ${colors.dim}Keeping existing .env. Nothing written.${colors.reset}`);
+      process.exit(0);
+    }
+  }
+  const envContent = buildEnvContent({ secrets, existing, calendar });
+  writeEnv(targetPath, envContent);
+  console.log('');
+  console.log(` ${colors.cyan}✓${colors.reset} Wrote .env ${colors.dim}(generated MEMORY_API_KEY and AUTH_SECRET automatically)${colors.reset}`);
+
+  // 7. Calendar OAuth must run on the host (browser redirect to localhost).
+  if (calendar) {
+    console.log('');
+    console.log(` ${colors.boldYellow}Authorize Google Calendar${colors.reset}`);
+    console.log(` ${colors.dim}A browser window will open for sign-in.${colors.reset}`);
+    try {
+      await runStreaming('node', ['slack/calendar-client.js', '--auth'], targetPath);
+      console.log(` ${colors.cyan}✓${colors.reset} Calendar authorized`);
+    } catch (err) {
+      console.log(` ${colors.yellow}○${colors.reset} Calendar auth did not complete (${err.message}).`);
+      console.log(`   ${colors.dim}Run it later: node slack/calendar-client.js --auth${colors.reset}`);
+    }
+  }
+
+  // 8. Bring up the stack.
+  console.log('');
+  console.log(` ${colors.boldYellow}Step 3: Starting the stack${colors.reset}`);
+  console.log(` ${colors.dim}docker compose up -d (first run builds images; this can take a few minutes)${colors.reset}`);
+  console.log('');
+  try {
+    await runStreaming('docker', ['compose', 'up', '-d'], targetPath);
+  } catch (err) {
+    console.log('');
+    console.log(` ${colors.red}!${colors.reset}  Failed to start the stack: ${err.message}`);
+    console.log(`   ${colors.dim}Check logs with: docker compose logs${colors.reset}`);
+    process.exit(1);
+  }
+
+  // 9. Pull the embedding model (first run only; harmless if already present).
+  console.log('');
+  console.log(` ${colors.dim}Pulling the embedding model (all-minilm:l6-v2)...${colors.reset}`);
+  try {
+    await runStreaming('docker', ['compose', 'exec', 'ollama', 'ollama', 'pull', 'all-minilm:l6-v2'], targetPath);
+  } catch {
+    console.log(` ${colors.yellow}○${colors.reset} Could not pull the model automatically. Run it once Ollama is healthy:`);
+    console.log(`   ${colors.dim}docker compose exec ollama ollama pull all-minilm:l6-v2${colors.reset}`);
+  }
+
+  // 10. Done.
+  console.log('');
+  console.log(` ${colors.cyan}✓${colors.reset} Claudia is running.`);
+  console.log('');
+  console.log(` ${colors.boldYellow}Next:${colors.reset}`);
+  console.log(`   • DM the bot or @mention it in a channel where it's invited`);
+  console.log(`   • Memory graph visualizer: ${colors.cyan}http://localhost:3849${colors.reset}`);
+  console.log(`   • Logs: ${colors.dim}docker compose logs -f slack-server${colors.reset}`);
+  console.log(`   • Stop: ${colors.dim}docker compose down${colors.reset}`);
   console.log('');
 }
 

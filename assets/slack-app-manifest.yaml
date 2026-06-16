@@ -1,0 +1,52 @@
+# Claudia Slack App Manifest
+#
+# Use this to create the Slack app in one step instead of clicking through
+# every setting by hand.
+#
+# How to use:
+#   1. Go to https://api.slack.com/apps
+#   2. Click "Create New App" → "From an app manifest"
+#   3. Pick your workspace
+#   4. Paste the contents of this file (switch the dialog to YAML)
+#   5. Click "Create", then "Install to Workspace"
+#
+# After installing, collect three values for your .env (the setup wizard
+# will prompt you for them):
+#   SLACK_BOT_TOKEN      - OAuth & Permissions page, "Bot User OAuth Token" (xoxb-...)
+#   SLACK_APP_TOKEN      - Basic Information → App-Level Tokens, generate one
+#                          with the connections:write scope (xapp-...)
+#   SLACK_SIGNING_SECRET - Basic Information page, "Signing Secret"
+#
+# This manifest enables Socket Mode, so the bot needs no public URL and works
+# behind any firewall. That is the recommended setup for self-hosting.
+
+display_information:
+  name: Claudia
+  description: A relationship-aware AI assistant that learns how you work.
+  background_color: "#1a1a2e"
+
+features:
+  bot_user:
+    display_name: Claudia
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # See @Claudia mentions in channels
+      - chat:write          # Reply in channels and threads
+      - im:history          # Read direct messages sent to the bot
+      - im:read             # Detect new DM conversations
+      - im:write            # Open DM conversations
+      - users:read          # Resolve user IDs to display names
+
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention         # Fires when someone @mentions the bot
+      - message.im          # Fires on direct messages to the bot
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

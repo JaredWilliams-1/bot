@@ -164,6 +164,46 @@ This upgrades framework files (CLAUDE.md, skills, rules, daemon code) while pres
 
 ---
 
+## Run Claudia as a Slack Bot (Docker)
+
+Want Claudia living in your Slack workspace instead of the terminal? The whole stack (bot, memory daemon, embedding model, and visualizer) runs in Docker. The only thing you install on your machine is **Docker** itself.
+
+**1. Get the code and start the guided setup**
+```bash
+git clone <your-repo-url> claudia && cd claudia
+node bin/index.js slack
+```
+
+The wizard will:
+- Check that Docker is installed and running
+- Walk you through creating the Slack app from a one-paste manifest
+- Prompt for the few secrets only you can provide (Slack tokens, Anthropic key)
+- Auto-generate the internal keys (`MEMORY_API_KEY`, `AUTH_SECRET`) for you
+- Optionally connect Google Calendar (skippable)
+- Write `.env`, bring up the stack with `docker compose up -d`, and pull the embedding model
+
+**2. Create the Slack app (the wizard points you here)**
+1. Open [api.slack.com/apps](https://api.slack.com/apps)
+2. **Create New App → From an app manifest**
+3. Choose your workspace, switch the dialog to **YAML**, and paste [`assets/slack-app-manifest.yaml`](assets/slack-app-manifest.yaml)
+4. **Create**, then **Install to Workspace**
+5. Copy three values when the wizard asks: the **Bot User OAuth Token** (`xoxb-…`), an **App-Level Token** with `connections:write` (`xapp-…`), and the **Signing Secret**
+
+The manifest enables **Socket Mode**, so the bot needs no public URL and works behind any firewall.
+
+**3. Talk to her.** DM the bot, or `@mention` it in a channel it's been invited to.
+
+| What | Where / Command |
+|------|-----------------|
+| Memory graph visualizer | http://localhost:3849 |
+| Follow bot logs | `docker compose logs -f slack-server` |
+| Stop everything | `docker compose down` |
+| Re-run setup (keeps generated keys) | `node bin/index.js slack` |
+
+**Requirements:** [Docker](https://www.docker.com/products/docker-desktop), a Slack workspace where you can install apps, and an [Anthropic API key](https://console.anthropic.com/account/keys).
+
+---
+
 ## See It in Action
 
 <!-- TODO: Replace with GIF showing memory recall -->

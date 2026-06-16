@@ -81,6 +81,11 @@ services:
       - .env
     ports:
       - "${SLACK_PORT:-3851}:${SLACK_PORT:-3851}"
+    volumes:
+      # Mount ~/.claudia so the bot can read (and refresh) the Google Calendar
+      # OAuth token created by `node slack/calendar-client.js --auth` on the host.
+      # Read-write so token auto-refresh can persist the rotated token.
+      - claudia-data:/home/claudia/.claudia
     depends_on:
       memory-daemon:
         condition: service_healthy
