@@ -29,12 +29,24 @@ features:
   bot_user:
     display_name: Claudia
     always_online: true
+  slash_commands:
+    - command: /connect-calendar     # Connect your own Google Calendar to Claudia
+      description: Connect your Google Calendar
+      should_escape: false
+      # No url needed: Socket Mode delivers slash commands over the socket.
+    - command: /help                 # Show what Claudia can do and how to use it
+      description: Show what Claudia can do
+      should_escape: false
+    - command: /info                 # Show Claudia's version and connection status
+      description: Show bot version and status
+      should_escape: false
 
 oauth_config:
   scopes:
     bot:
       - app_mentions:read   # See @Claudia mentions in channels
       - chat:write          # Reply in channels and threads
+      - commands            # Receive the /connect-calendar slash command
       - im:history          # Read direct messages sent to the bot
       - im:read             # Detect new DM conversations
       - im:write            # Open DM conversations
