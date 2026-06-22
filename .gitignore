@@ -26,6 +26,10 @@ credentials.json
 *.pem
 *.key
 
+# OAuth token files (defense in depth if data dir ever lands in the repo tree)
+google-token.json
+*-token.json
+
 # Build artifacts
 dist/
 build/
