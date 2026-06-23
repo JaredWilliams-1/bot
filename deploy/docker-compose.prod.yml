@@ -1,0 +1,79 @@
+###############################################################################
+# Production overrides for VPS deployment.
+#
+# Usage (from the project root on the VPS):
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build
+#
+# What this layer changes vs. the base docker-compose.yml:
+#   1. Stops publishing internal services to the host. On a public server,
+#      the base file's "3849:3849", "3850:3850", "11434:11434" would expose
+#      the visualizer, memory daemon, and Ollama to the whole internet.
+#      Here they talk over the private claudia-net bridge only.
+#   2. The Slack bot uses Socket Mode (dials out to Slack), so it needs no
+#      published port for chat. The ONLY thing that must be reachable from
+#      the internet is the Google OAuth callback, which Caddy reverse-proxies
+#      over HTTPS to the bot's sidecar.
+#   3. Adds Caddy as the single public entrypoint (ports 80/443) with
+#      automatic Let's Encrypt TLS.
+#
+# The visualizer stays private. Reach it from your laptop with an SSH tunnel:
+#   ssh -L 3849:localhost:3849 you@your-server   then open http://localhost:3849
+# (For that tunnel to work, see the note on the visualizer service below.)
+###############################################################################
+
+services:
+  # Memory daemon: internal only. Remove the published port.
+  memory-daemon:
+    ports: !reset []
+
+  # Ollama: internal only.
+  ollama:
+    ports: !reset []
+
+  # Slack bot: Socket Mode means no public chat port. We do NOT publish its
+  # port to the host; Caddy reaches it over the internal network for the
+  # OAuth callback. SLACK_SOCKET_MODE must be true (set in .env).
+  slack-server:
+    ports: !reset []
+    environment:
+      # The public HTTPS callback URL Google redirects to. MUST match the
+      # authorized redirect URI in your Google Cloud OAuth client AND the
+      # domain in deploy/Caddyfile. Set CLAUDIA_DOMAIN in .env.
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://${CLAUDIA_DOMAIN}/oauth2callback}
+      SLACK_SOCKET_MODE: "true"
+
+  # Visualizer: bind only to loopback on the host so it is NOT internet-facing
+  # but IS reachable through an SSH tunnel to localhost:3849.
+  visualizer:
+    ports: !reset
+      - "127.0.0.1:3849:3849"
+    environment:
+      # Require login in production. The visualizer exposes the memory graph,
+      # so we never ship it unauthenticated on a server, even loopback-bound.
+      # AUTH_SECRET must be set (the slack setup wizard generates it in .env).
+      AUTH_DISABLED: "false"
+
+  # Caddy: the only public-facing service. Auto-HTTPS via Let's Encrypt,
+  # reverse-proxies the OAuth callback path to the Slack bot's sidecar.
+  caddy:
+    image: caddy:2-alpine
+    container_name: claudia-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      CLAUDIA_DOMAIN: ${CLAUDIA_DOMAIN}
+      SLACK_PORT: ${SLACK_PORT:-3851}
+    depends_on:
+      - slack-server
+    networks:
+      - claudia-net
+
+volumes:
+  caddy-data:
+  caddy-config:

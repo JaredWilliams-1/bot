@@ -71,10 +71,10 @@ export async function handleMessage({ text, userId, username, channelId, threadT
   // 2. Build the messages array for Claude
   const messages = buildMessages({ text, username, context });
 
-  // 3. Call Claude
+  // 3. Call Claude (userId is threaded down so calendar tools resolve per-user)
   let replyText;
   try {
-    replyText = await callClaude(messages);
+    replyText = await callClaude(messages, userId);
   } catch (err) {
     console.error('[handler] Claude API error:', err);
     await say({
@@ -111,7 +111,7 @@ async function buildMemoryContext({ text, userId, username }) {
     const [recallResult, briefingResult, calendarContext] = await Promise.allSettled([
       memory.recall({ query: text, userId, limit: MEMORY_RECALL_LIMIT }),
       memory.briefing({ userId }),
-      buildCalendarContext(),
+      buildCalendarContext(userId),
     ]);
 
     const lines = [];
@@ -176,7 +176,9 @@ function buildMessages({ text, username, context }) {
  * Uses prompt caching on the system prompt to reduce latency and cost for
  * repeated interactions (system prompt is stable across requests).
  */
-async function callClaude(messages) {
+async function callClaude(messages, userId) {
+  const calendarConnected = isCalendarConfigured(userId);
+
   const system = [
     {
       type: "text",
@@ -187,9 +189,16 @@ async function callClaude(messages) {
       type: "text",
       text: `Today's date is ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}.`,
     },
+    {
+      type: "text",
+      text: calendarConnected
+        ? "This user has connected their Google Calendar. Their upcoming events appear under \"## Upcoming Calendar Events\" when present, and you can create events for them."
+        : "This user has NOT connected a Google Calendar yet. If they ask about their schedule or to create an event, tell them to connect it by sending \"/connect-calendar\" (or just \"connect calendar\") to you. Do not claim to have their calendar data.",
+    },
   ];
 
-  const tools = isCalendarConfigured() ? CALENDAR_TOOLS : [];
+  // Only offer calendar tools when this specific user has connected their calendar.
+  const tools = calendarConnected ? CALENDAR_TOOLS : [];
   const toolOptions = tools.length > 0 ? { tools, tool_choice: { type: "auto" } } : {};
 
   const response = await anthropic.messages.create({
@@ -206,7 +215,7 @@ async function callClaude(messages) {
       toolUseBlocks.map(async (toolUse) => ({
         type: "tool_result",
         tool_use_id: toolUse.id,
-        content: JSON.stringify(await dispatchTool(toolUse.name, toolUse.input)),
+        content: JSON.stringify(await dispatchTool(toolUse.name, toolUse.input, userId)),
       }))
     );
 
@@ -232,10 +241,10 @@ async function callClaude(messages) {
   return block.text;
 }
 
-async function dispatchTool(name, input) {
+async function dispatchTool(name, input, userId) {
   if (name === "create_calendar_event") {
     try {
-      const event = await createEvent(input);
+      const event = await createEvent(userId, input);
       console.log("[handler] Calendar event created:", event.summary);
       return { success: true, event };
     } catch (err) {

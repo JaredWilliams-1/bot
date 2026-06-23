@@ -1,0 +1,46 @@
+name: Deploy to VPS
+
+# Push-to-deploy: whenever main updates, SSH into the VPS, pull the new code,
+# and rebuild/restart the stack. After one-time setup, "deploy" = merge to main.
+#
+# Required GitHub repo secrets (Settings -> Secrets and variables -> Actions):
+#   VPS_HOST        - server IP or hostname
+#   VPS_USER        - SSH user (e.g. root, or a sudo user)
+#   VPS_SSH_KEY     - a PRIVATE SSH key whose PUBLIC half is in the server's
+#                     ~/.ssh/authorized_keys. Generate a dedicated deploy key:
+#                       ssh-keygen -t ed25519 -f deploy_key -N ""
+#                     put deploy_key.pub on the server, paste deploy_key here.
+#   VPS_APP_DIR     - (optional) path to the checkout on the server.
+#                     Defaults to ~/bot to match deploy/setup.sh.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # allow manual "Run workflow" from the Actions tab
+
+concurrency:
+  group: vps-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.VPS_APP_DIR }}"
+            APP_DIR="${APP_DIR:-$HOME/bot}"
+            cd "$APP_DIR"
+            git fetch --all --quiet
+            git checkout main --quiet
+            git pull --ff-only origin main
+            docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build
+            docker image prune -f
+            echo "Deploy complete: $(git rev-parse --short HEAD)"

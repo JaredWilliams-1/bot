@@ -1,0 +1,35 @@
+# Caddy reverse proxy for Claudia on a VPS.
+#
+# Caddy automatically obtains and renews a free Let's Encrypt TLS certificate
+# for {$CLAUDIA_DOMAIN}, so you get HTTPS with no manual cert work. This is
+# what makes the Google Calendar OAuth callback work (Google requires HTTPS).
+#
+# Only ONE thing is exposed to the public internet: the OAuth callback path.
+# Everything else (memory daemon, Ollama, visualizer) stays on the private
+# Docker network. The Slack bot itself needs no inbound route because it uses
+# Socket Mode (it dials out to Slack).
+#
+# CLAUDIA_DOMAIN and SLACK_PORT are injected from the environment by the
+# caddy service in deploy/docker-compose.prod.yml.
+
+{$CLAUDIA_DOMAIN} {
+	# The Slack bot's sidecar (health + OAuth callback) listens on SLACK_PORT
+	# in Socket Mode. Reverse-proxy only the OAuth callback path to it.
+	handle /oauth2callback* {
+		reverse_proxy slack-server:{$SLACK_PORT}
+	}
+
+	# Optional: a tiny health route so you can curl the domain and confirm
+	# Caddy + TLS are up without exposing anything sensitive.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# Everything else gets a 404. No other internal service is reachable
+	# from the internet.
+	handle {
+		respond "Not found" 404
+	}
+
+	encode gzip
+}
