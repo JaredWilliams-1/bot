@@ -23,7 +23,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Gate the deploy on the full test suite. A merge to main goes straight to
+  # production, so this is the only thing standing between a broken commit and
+  # the live bot.
+  tests:
+    uses: ./.github/workflows/test.yml
+
   deploy:
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - name: Deploy over SSH

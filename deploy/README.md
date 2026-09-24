@@ -106,6 +106,64 @@ Expect `ok`. Then DM the bot in Slack.
 
 ---
 
+## (b.1) Multi-workspace install (optional)
+
+By default the bot runs in single-workspace mode: one static bot token in
+`SLACK_BOT_TOKEN`, serving the one workspace you installed it into. If you want
+OTHER workspaces to install Claudia themselves via "Add to Slack", switch on
+multi-tenant mode. Existing single-workspace deployments are untouched unless you
+set the variables below.
+
+How it works: the bot keeps using Socket Mode for events, but the
+SocketModeReceiver also serves two public HTTPS routes for the OAuth install
+flow. Caddy proxies `/slack/*` to them. When a workspace installs the app, Bolt
+stores that workspace's bot token on disk (on the persistent `~/.claudia`
+volume), and every incoming event is answered with the right per-workspace
+token. Per-user data (memory and calendar) is namespaced by workspace, so two
+users with the same Slack id in different workspaces never collide.
+
+Steps:
+
+1. **Enable distribution in the Slack app config.** In your app at
+   api.slack.com/apps, open "Manage Distribution" and activate public
+   distribution. Under "OAuth & Permissions", add the redirect URL:
+
+   https://your-domain.com/slack/oauth_redirect
+
+   (The manifest in `assets/slack-app-manifest.yaml` has a commented
+   `redirect_urls` block you can uncomment.)
+
+2. **Set the three env vars in `.env`** (this is what flips on multi-tenant mode):
+
+   ```
+   SLACK_BOT_CLIENT_ID=...      # Basic Information > App Credentials
+   SLACK_BOT_CLIENT_SECRET=...  # Basic Information > App Credentials
+   SLACK_STATE_SECRET=...       # openssl rand -hex 32
+   ```
+
+   These are namespaced `SLACK_BOT_*` on purpose: the visualizer's Slack SSO
+   uses `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` in the same `.env` for a
+   different Slack app, so do not reuse those for the bot.
+
+   Keep `SLACK_APP_TOKEN` (xapp-...) set, since events still use Socket Mode.
+   `SLACK_BOT_TOKEN` is no longer required in this mode.
+
+3. **Caddy is already pointed.** `deploy/Caddyfile` proxies `/slack/*` to the
+   bot's install port (`SLACK_INSTALL_PORT`, default 3853). No change needed
+   unless you override the port.
+
+4. **Share the install URL.** Send workspaces to:
+
+   https://your-domain.com/slack/install
+
+   Clicking it runs Slack's "Add to Slack" approval and stores their token.
+
+For org-wide (Enterprise Grid) installs, also set
+`org_deploy_enabled: true` in the manifest; the store keys org installs on the
+enterprise id.
+
+---
+
 ## (c) GitHub secrets for the deploy workflow
 
 The deploy workflow needs SSH access to the droplet. Use a dedicated deploy key,

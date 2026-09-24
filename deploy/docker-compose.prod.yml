@@ -41,6 +41,12 @@ services:
       # domain in deploy/Caddyfile. Set CLAUDIA_DOMAIN in .env.
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://${CLAUDIA_DOMAIN}/oauth2callback}
       SLACK_SOCKET_MODE: "true"
+      # Multi-workspace install routes listen on this internal port; Caddy
+      # reverse-proxies /slack/* here. Must match Caddy's SLACK_INSTALL_PORT.
+      # All other multi-tenant vars (SLACK_BOT_CLIENT_ID, SLACK_BOT_CLIENT_SECRET,
+      # SLACK_STATE_SECRET, SLACK_SCOPES, SLACK_INSTALLATION_DIR) flow in via
+      # the base file's env_file: .env, so no extra wiring is needed here.
+      SLACK_INSTALL_PORT: ${SLACK_INSTALL_PORT:-3853}
 
   # Visualizer: bind only to loopback on the host so it is NOT internet-facing
   # but IS reachable through an SSH tunnel to localhost:3849.
@@ -69,6 +75,8 @@ services:
     environment:
       CLAUDIA_DOMAIN: ${CLAUDIA_DOMAIN}
       SLACK_PORT: ${SLACK_PORT:-3851}
+      # Install routes port, referenced by the /slack/* handler in the Caddyfile.
+      SLACK_INSTALL_PORT: ${SLACK_INSTALL_PORT:-3853}
     depends_on:
       - slack-server
     networks:

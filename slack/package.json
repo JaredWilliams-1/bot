@@ -9,10 +9,11 @@
     "dev": "node --env-file=../.env --watch server.js",
     "start:memory": "node --env-file=../.env start-memory.js",
     "dev:all": "concurrently \"npm run start:memory\" \"npm run dev\"",
-    "setup": "node setup.js"
+    "setup": "node setup.js",
+    "test": "node --test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^0.110.0",
     "@slack/bolt": "^4.0.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.0",

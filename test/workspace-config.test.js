@@ -1,9 +1,18 @@
 /**
- * Tests for Google Workspace MCP integration.
- * Validates .mcp.json.example files have the correct workspace-mcp config
- * and old @gongrzhe servers are removed.
+ * Tests for the Google integration config.
  *
- * Run: node --test tests/test_workspace_config.js
+ * Validates that the .mcp.json.example files carry a correct workspace-mcp
+ * entry AND keep the standalone gmail/google-calendar servers alongside it.
+ *
+ * Note on history: an earlier revision of this file asserted that every trace
+ * of the standalone @gongrzhe servers had been removed, because at the time
+ * workspace-mcp was meant to replace them. Release 1.55.13 reversed that:
+ * "the standalone gmail and google-calendar servers are now first-class
+ * options alongside workspace-mcp ... Both can coexist." Those removal
+ * assertions are therefore inverted here, so the suite guards the two-path
+ * setup that actually shipped instead of a migration that was abandoned.
+ *
+ * Run: npm test
  */
 
 import { describe, it } from 'node:test';
@@ -66,20 +75,14 @@ describe('.mcp.json.example (root)', () => {
       'Expected GOOGLE_OAUTH_CLIENT_SECRET in env');
   });
 
-  it('does NOT have old gmail entry', () => {
-    assert.equal(config.mcpServers.gmail, undefined,
-      'Old gmail entry should be removed');
+  it('keeps the standalone gmail entry (Option A)', () => {
+    assert.ok(config.mcpServers.gmail,
+      'Standalone gmail server should remain offered alongside workspace-mcp');
   });
 
-  it('does NOT have old google-calendar entry', () => {
-    assert.equal(config.mcpServers['google-calendar'], undefined,
-      'Old google-calendar entry should be removed');
-  });
-
-  it('does NOT reference @gongrzhe anywhere', () => {
-    const raw = readFileSync(join(ROOT, '.mcp.json.example'), 'utf-8');
-    assert.ok(!raw.includes('@gongrzhe'),
-      'No references to @gongrzhe should remain');
+  it('keeps the standalone google-calendar entry (Option A)', () => {
+    assert.ok(config.mcpServers['google-calendar'],
+      'Standalone google-calendar server should remain offered alongside workspace-mcp');
   });
 
   it('still has rube entry', () => {
@@ -117,17 +120,12 @@ describe('template-v2/.mcp.json.example', () => {
     assert.ok('GOOGLE_OAUTH_CLIENT_SECRET' in gw.env);
   });
 
-  it('does NOT have old gmail entry', () => {
-    assert.equal(config.mcpServers.gmail, undefined);
+  it('keeps the standalone gmail entry (Option A)', () => {
+    assert.ok(config.mcpServers.gmail);
   });
 
-  it('does NOT have old google-calendar entry', () => {
-    assert.equal(config.mcpServers['google-calendar'], undefined);
-  });
-
-  it('does NOT reference @gongrzhe anywhere', () => {
-    const raw = readFileSync(join(ROOT, 'template-v2', '.mcp.json.example'), 'utf-8');
-    assert.ok(!raw.includes('@gongrzhe'));
+  it('keeps the standalone google-calendar entry (Option A)', () => {
+    assert.ok(config.mcpServers['google-calendar']);
   });
 
   it('still has claudia-memory entry', () => {
@@ -171,9 +169,9 @@ describe('installer migration logic', () => {
 describe('CLAUDE.md documentation', () => {
   const rootMd = readFileSync(join(ROOT, 'CLAUDE.md'), 'utf-8');
 
-  it('does not reference @gongrzhe', () => {
-    assert.ok(!rootMd.includes('@gongrzhe'),
-      'CLAUDE.md should not reference old @gongrzhe packages');
+  it('documents the standalone Gmail/Calendar path (Option A)', () => {
+    assert.ok(rootMd.includes('@gongrzhe'),
+      'CLAUDE.md should still document the standalone gmail/calendar MCPs');
   });
 
   it('references workspace-mcp or google_workspace', () => {
@@ -197,9 +195,9 @@ describe('CLAUDE.md documentation', () => {
 describe('template-v2/CLAUDE.md documentation', () => {
   const templateMd = readFileSync(join(ROOT, 'template-v2', 'CLAUDE.md'), 'utf-8');
 
-  it('does not reference @gongrzhe', () => {
-    assert.ok(!templateMd.includes('@gongrzhe'),
-      'template-v2/CLAUDE.md should not reference old @gongrzhe packages');
+  it('documents the standalone Gmail/Calendar path (Option A)', () => {
+    assert.ok(templateMd.includes('@gongrzhe'),
+      'template-v2/CLAUDE.md should still document the standalone gmail/calendar MCPs');
   });
 
   it('references workspace-mcp or google_workspace', () => {
@@ -212,29 +210,30 @@ describe('template-v2/CLAUDE.md documentation', () => {
 
 // ─── Skills ─────────────────────────────────────────────────────────────────
 
+// These read from template-v2/, which is the copy that actually ships to users.
+// The repo root has its own partial .claude/ used for developing Claudia itself;
+// asserting against that one tested a file no user ever receives.
+
 describe('connector-discovery skill', () => {
-  const skill = readFileSync(join(ROOT, '.claude', 'skills', 'connector-discovery.md'), 'utf-8');
+  const skill = readFileSync(
+    join(ROOT, 'template-v2', '.claude', 'skills', 'connector-discovery.md'), 'utf-8'
+  );
 
-  it('does not reference @gongrzhe', () => {
-    assert.ok(!skill.includes('@gongrzhe'),
-      'connector-discovery should not reference old @gongrzhe packages');
-  });
-
-  it('references workspace-mcp for Gmail', () => {
-    assert.ok(skill.includes('workspace-mcp'),
-      'connector-discovery should recommend workspace-mcp');
+  it('recommends a supported Gmail connector', () => {
+    assert.ok(skill.includes('@gongrzhe/server-gmail-autoauth-mcp'),
+      'connector-discovery should point at the Gmail MCP documented in CLAUDE.md');
   });
 });
 
 describe('inbox-check skill', () => {
   const skill = readFileSync(
-    join(ROOT, '.claude', 'skills', 'inbox-check', 'SKILL.md'), 'utf-8'
+    join(ROOT, 'template-v2', '.claude', 'skills', 'inbox-check', 'SKILL.md'), 'utf-8'
   );
 
-  // inbox-check uses generic gmail.* tool detection, which works with any
-  // MCP server exposing gmail tools. The test just ensures no @gongrzhe ref.
-  it('does not reference @gongrzhe', () => {
-    assert.ok(!skill.includes('@gongrzhe'),
-      'inbox-check should not reference old @gongrzhe packages');
+  // inbox-check detects gmail.* tools generically, so it works with either
+  // integration path rather than naming a specific server.
+  it('detects gmail tools generically', () => {
+    assert.ok(/gmail/i.test(skill),
+      'inbox-check should reference gmail tools');
   });
 });
