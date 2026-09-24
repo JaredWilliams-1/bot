@@ -41,7 +41,7 @@
   "devDependencies": {},
   "scripts": {
     "generate-manifest": "node scripts/generate-manifest.js",
-    "test": "node --test test/",
+    "test": "node --test test/*.test.js",
     "prepublishOnly": "node scripts/generate-manifest.js"
   },
   "engines": {

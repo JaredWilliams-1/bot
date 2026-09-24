@@ -1,0 +1,76 @@
+name: Tests
+
+# Runs every suite in the repo. Also exposed via workflow_call so deploy.yml
+# can gate a VPS deploy on it: merging to main ships straight to production,
+# so the tests need to be a hard prerequisite rather than a parallel signal.
+#
+# There is deliberately no `push` trigger. Pushes to main are covered by the
+# deploy workflow calling this one, and adding `push` here would run the same
+# suites twice for the same commit.
+
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch: {}
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  javascript:
+    name: JS (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20/22/24 are the maintained lines. 25 is included on purpose: the
+        # root test script used to pass a directory to `node --test`, which
+        # only breaks on 25, so an LTS-only matrix would have missed it.
+        node: ['20', '22', '24', '25']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The root package (installer + template tooling) has no dependencies,
+      # so there is nothing to install before running it.
+      - name: Root suite (installer, manifest, config)
+        run: npm test
+
+      # The Slack bot is a separate package with its own lockfile.
+      - name: Slack bot suite
+        working-directory: slack
+        run: |
+          npm ci
+          npm test
+
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ends of the range supported in pyproject.toml (>=3.10,<3.14).
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # dev brings pytest, http brings fastapi/uvicorn for the endpoint tests.
+      # The nlp extra (spaCy) is intentionally skipped: it is slow to install
+      # and the tests that need it skip themselves when it is missing.
+      - name: Install memory daemon
+        working-directory: memory-daemon
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,http]"
+
+      - name: Memory daemon suite
+        working-directory: memory-daemon
+        run: python -m pytest -q

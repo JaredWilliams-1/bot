@@ -65,11 +65,24 @@ services:
     container_name: claudia-slack-server
     restart: unless-stopped
     environment:
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      # Optional in multi-tenant mode (token resolved per workspace), required
+      # in single-workspace mode. Keep the :- default so an unset value does not
+      # error out compose interpolation when running multi-tenant.
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
       SLACK_SOCKET_MODE: ${SLACK_SOCKET_MODE:-false}
       SLACK_PORT: ${SLACK_PORT:-3851}
+      # Multi-workspace install mode (optional). Set all three of BOT_CLIENT_ID,
+      # BOT_CLIENT_SECRET, STATE_SECRET to enable; leave blank for single-workspace.
+      # SLACK_BOT_CLIENT_ID/SECRET are the BOT's app credentials, distinct from
+      # the visualizer's SLACK_CLIENT_ID/SECRET (different Slack apps).
+      SLACK_BOT_CLIENT_ID: ${SLACK_BOT_CLIENT_ID:-}
+      SLACK_BOT_CLIENT_SECRET: ${SLACK_BOT_CLIENT_SECRET:-}
+      SLACK_STATE_SECRET: ${SLACK_STATE_SECRET:-}
+      SLACK_SCOPES: ${SLACK_SCOPES:-}
+      SLACK_INSTALL_PORT: ${SLACK_INSTALL_PORT:-3853}
+      SLACK_INSTALLATION_DIR: ${SLACK_INSTALLATION_DIR:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-6}
       MEMORY_API_URL: http://memory-daemon:3850
@@ -81,6 +94,9 @@ services:
       - .env
     ports:
       - "${SLACK_PORT:-3851}:${SLACK_PORT:-3851}"
+      # Install + oauth_redirect routes (multi-tenant mode). Published for local
+      # dev without Caddy; in production Caddy reaches it over claudia-net.
+      - "${SLACK_INSTALL_PORT:-3853}:${SLACK_INSTALL_PORT:-3853}"
     volumes:
       # Mount ~/.claudia so the bot can read (and refresh) the Google Calendar
       # OAuth token created by `node slack/calendar-client.js --auth` on the host.
@@ -90,10 +106,11 @@ services:
       memory-daemon:
         condition: service_healthy
     healthcheck:
-      # In HTTP mode (default), the health endpoint runs on PORT+1 (3852).
-      # In Socket Mode, it runs on PORT (3851). The script handles both.
+      # Mirrors the healthPort logic in server.js: the sidecar only moves to
+      # PORT+1 (3852) in single-workspace HTTP mode, where Bolt owns PORT.
+      # Socket Mode and multi-tenant mode both leave the sidecar on PORT (3851).
       test: ["CMD", "node", "-e",
-        "const p = parseInt(process.env.SLACK_PORT||3851); const h = process.env.SLACK_SOCKET_MODE==='true' ? p : p+1; fetch('http://localhost:'+h+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+        "const p = parseInt(process.env.SLACK_PORT||3851); const mt = Boolean(process.env.SLACK_BOT_CLIENT_ID && process.env.SLACK_BOT_CLIENT_SECRET && process.env.SLACK_STATE_SECRET); const h = (mt || process.env.SLACK_SOCKET_MODE==='true') ? p : p+1; fetch('http://localhost:'+h+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3

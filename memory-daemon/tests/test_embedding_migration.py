@@ -119,10 +119,10 @@ class TestMigration:
             assert rows[0]["cnt"] == 1
 
             # Simulate migration: drop and recreate at 768D
-            with database.transaction() as conn:
+            with database.transaction():
                 for table, pk in Database.VEC0_TABLES:
-                    conn.execute(f"DROP TABLE IF EXISTS {table}")
-                    conn.execute(f"""
+                    database.execute(f"DROP TABLE IF EXISTS {table}")
+                    database.execute(f"""
                         CREATE VIRTUAL TABLE {table} USING vec0(
                             {pk} INTEGER PRIMARY KEY,
                             embedding FLOAT[768]
@@ -209,9 +209,9 @@ class TestMigration:
                 )
 
             # Drop and recreate at new dimensions
-            with database.transaction() as conn:
-                conn.execute("DROP TABLE IF EXISTS memory_embeddings")
-                conn.execute("""
+            with database.transaction():
+                database.execute("DROP TABLE IF EXISTS memory_embeddings")
+                database.execute("""
                     CREATE VIRTUAL TABLE memory_embeddings USING vec0(
                         memory_id INTEGER PRIMARY KEY,
                         embedding FLOAT[768]

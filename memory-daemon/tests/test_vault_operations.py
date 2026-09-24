@@ -808,7 +808,7 @@ def test_dataview_templates_not_overwritten(db, vault_dir):
 # =============================================================================
 
 
-def test_write_through_graceful_failure(db, vault_dir):
+def test_write_through_graceful_failure(db, vault_dir, monkeypatch):
     """The service handles write failures gracefully without crashing."""
     _seed_entity(db, "Test Person", "person", importance=1.0)
 
@@ -821,22 +821,20 @@ def test_write_through_graceful_failure(db, vault_dir):
     result = service.export_entity_by_name("Test Person")
     assert result is not None
 
-    # Now make the target file read-only and try to overwrite
-    result.chmod(0o444)
-    result.parent.chmod(0o555)
+    # Force the write itself to fail. chmod is not a portable way to do this:
+    # root can still write to read-only files, which made this test fail on
+    # Linux CI and in containers even though graceful handling was correct.
+    def fail_write(*_args, **_kwargs):
+        raise PermissionError("simulated read-only vault")
 
-    try:
-        # Re-export should fail gracefully (return None), not raise
-        result2 = service.export_entity_by_id(
-            db.execute(
-                "SELECT id FROM entities WHERE canonical_name = ?",
-                ("test person",),
-                fetch=True,
-            )[0]["id"]
-        )
-        # The method returns None on IOError
-        assert result2 is None
-    finally:
-        # Restore permissions for cleanup
-        result.parent.chmod(0o755)
-        result.chmod(0o644)
+    monkeypatch.setattr(Path, "write_text", fail_write)
+
+    # Re-export should fail gracefully (return None), not raise.
+    result2 = service.export_entity_by_id(
+        db.execute(
+            "SELECT id FROM entities WHERE canonical_name = ?",
+            ("test person",),
+            fetch=True,
+        )[0]["id"]
+    )
+    assert result2 is None

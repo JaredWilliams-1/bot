@@ -30,6 +30,10 @@ credentials.json
 google-token.json
 *-token.json
 
+# Per-workspace Slack installations (contain bot tokens). Never commit these.
+installations/
+.bolt-js-app-installation/
+
 # Build artifacts
 dist/
 build/

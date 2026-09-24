@@ -2,7 +2,7 @@
  * Tests for the `get-claudia google` subcommand logic.
  * Tests the core functions that modify .mcp.json for Google Workspace setup.
  *
- * Run: node --test tests/test_google_setup.js
+ * Run: npm test
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';

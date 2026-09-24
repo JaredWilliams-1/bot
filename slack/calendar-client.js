@@ -42,6 +42,7 @@ import { randomBytes } from 'crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
+import { storageId } from './identity.js';
 import 'dotenv/config';
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -74,6 +75,11 @@ const GLOBAL_CACHE_KEY = '__global__';
 // Value: { userId, expiresAt }. The nonce (not the userId) travels through
 // the OAuth `state` parameter, so a public callback cannot be used to bind a
 // victim's Slack identity to an attacker's Google account.
+//
+// Deliberately in-memory: this assumes a SINGLE bot instance, and a process
+// restart invalidates any connect link issued before it (the user just sends
+// /connect-calendar again). If the bot ever runs multiple replicas, this map
+// must move to shared storage.
 const _pendingConnects = new Map();
 const CONNECT_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -99,6 +105,29 @@ function createOAuthClient() {
 function sanitizeUserId(userId) {
   const safe = String(userId).replace(/[^a-zA-Z0-9_-]/g, '');
   return safe || 'default';
+}
+
+/**
+ * Resolve a caller-supplied identity into the composite storage key.
+ *
+ * Accepts EITHER a bare string (legacy: the raw Slack userId, used as the key
+ * directly for full backward compatibility) OR a context object
+ * { userId, teamId, enterpriseId }. In multi-tenant mode the returned key is
+ * namespaced by team/enterprise via storageId(), so two users with the same
+ * Slack id in different workspaces never share a calendar token. In
+ * single-workspace mode the bare userId is kept even if team context is
+ * present, so existing token files keep working. The key is later sanitized
+ * by tokenPathFor/cacheKeyFor.
+ *
+ * @param {string|{userId?: string, teamId?: string, enterpriseId?: string}} idOrContext
+ * @returns {string} The storage key (composite when team context exists), or '' for falsy input.
+ */
+function resolveStorageKey(idOrContext) {
+  if (!idOrContext) return '';
+  if (typeof idOrContext === 'string') return idOrContext;
+  const { userId, teamId, enterpriseId } = idOrContext;
+  if (!userId) return '';
+  return storageId({ userId, teamId, enterpriseId });
 }
 
 /**
@@ -138,12 +167,14 @@ function saveToken(tokenPath, token) {
  * user's saved token. Returns null if credentials are not configured or the
  * user has not connected their calendar.
  *
- * @param {string} [userId] - Slack user ID. Falsy uses the legacy global token.
+ * @param {string|object} [idOrContext] - Slack user ID, or a context object
+ *   { userId, teamId, enterpriseId }. Falsy uses the legacy global token.
  * @returns {Promise<import('google-auth-library').OAuth2Client|null>}
  */
-async function getAuthClient(userId) {
+async function getAuthClient(idOrContext) {
   if (!isConfigured()) return null;
 
+  const userId = resolveStorageKey(idOrContext);
   const key = cacheKeyFor(userId);
   if (_clientCache.has(key)) return _clientCache.get(key);
 
@@ -153,10 +184,14 @@ async function getAuthClient(userId) {
 
   const oauth2Client = createOAuthClient();
   oauth2Client.setCredentials(saved);
-  // Persist refreshed tokens automatically to this user's path.
+  // Persist refreshed tokens automatically to this user's path. Merge into the
+  // LAST saved state, not the originally loaded object, so a second refresh in
+  // the same process doesn't clobber fields from the first (e.g. a rotated
+  // refresh_token).
+  let lastSaved = saved;
   oauth2Client.on('tokens', (tokens) => {
-    const merged = { ...saved, ...tokens };
-    saveToken(tokenPath, merged);
+    lastSaved = { ...lastSaved, ...tokens };
+    saveToken(tokenPath, lastSaved);
   });
 
   _clientCache.set(key, oauth2Client);
@@ -187,23 +222,52 @@ function pruneExpiredConnects() {
  * state=<victim userId> to bind a victim's Slack identity to their own Google
  * account (account fixation).
  *
- * @param {string} userId - Slack user ID.
+ * @param {string|object} idOrContext - Slack user ID, or a context object
+ *   { userId, teamId, enterpriseId, isEnterpriseInstall }. In multi-tenant mode
+ *   pass the context so the saved token is namespaced by workspace and the
+ *   callback can look the installation back up.
  * @returns {string} The consent URL to send the user.
  */
-export function generateAuthUrl(userId) {
+export function generateAuthUrl(idOrContext) {
   if (!isConfigured()) {
     throw new Error(
       'GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set to connect a calendar.'
     );
   }
-  if (!userId) {
+  const storageKey = resolveStorageKey(idOrContext);
+  if (!storageKey) {
     throw new Error('generateAuthUrl requires a userId.');
   }
+
+  // Capture the raw Slack userId and team context too, so the OAuth callback can
+  // DM the right user in the right workspace after the token is saved. The
+  // STORAGE KEY (possibly composite) is what the token path is keyed on; the raw
+  // userId is what Slack API calls need.
+  //
+  // isEnterpriseInstall comes from Bolt's event context and must be carried
+  // verbatim: it is what decides whether the installation was filed under the
+  // enterprise id or the team id. It cannot be re-derived from the ids alone,
+  // because an org-wide install still reports a teamId on events.
+  const ctx = typeof idOrContext === 'string'
+    ? { rawUserId: idOrContext }
+    : {
+      rawUserId: idOrContext.userId,
+      teamId: idOrContext.teamId,
+      enterpriseId: idOrContext.enterpriseId,
+      isEnterpriseInstall: idOrContext.isEnterpriseInstall,
+    };
 
   pruneExpiredConnects();
 
   const nonce = randomBytes(32).toString('hex');
-  _pendingConnects.set(nonce, { userId, expiresAt: Date.now() + CONNECT_TTL_MS });
+  _pendingConnects.set(nonce, {
+    storageKey,
+    rawUserId: ctx.rawUserId,
+    teamId: ctx.teamId,
+    enterpriseId: ctx.enterpriseId,
+    isEnterpriseInstall: ctx.isEnterpriseInstall,
+    expiresAt: Date.now() + CONNECT_TTL_MS,
+  });
 
   const oauth2Client = createOAuthClient();
   return oauth2Client.generateAuthUrl({
@@ -221,7 +285,12 @@ export function generateAuthUrl(userId) {
  *
  * @param {string} code  - The authorization code from the query string.
  * @param {string} state - The single-use nonce carried through the consent flow.
- * @returns {Promise<string>} The resolved userId whose token was saved.
+ * @returns {Promise<{rawUserId: string, teamId?: string, enterpriseId?: string,
+ *   isEnterpriseInstall?: boolean, storageKey: string}>}
+ *   The resolved identity. rawUserId is the raw Slack id (for DMing the user);
+ *   teamId/enterpriseId/isEnterpriseInstall identify the installation (for
+ *   picking the right client); storageKey is the composite key the token was
+ *   saved under.
  */
 export async function handleOAuthCallback(code, state) {
   if (!isConfigured()) {
@@ -241,25 +310,34 @@ export async function handleOAuthCallback(code, state) {
   // Single use: consume immediately so a replayed code can't reuse this nonce.
   _pendingConnects.delete(state);
 
-  const userId = entry.userId;
+  const storageKey = entry.storageKey;
   const oauth2Client = createOAuthClient();
   const { tokens } = await oauth2Client.getToken(code);
 
   // sanitizeUserId is applied inside tokenPathFor/cacheKeyFor (defense in depth).
-  const tokenPath = tokenPathFor(userId);
+  const tokenPath = tokenPathFor(storageKey);
   saveToken(tokenPath, tokens);
 
-  // Refresh the cache so the new token takes effect immediately.
-  const key = cacheKeyFor(userId);
+  // Refresh the cache so the new token takes effect immediately. As above,
+  // merge refreshes into the last saved state so back-to-back refreshes in one
+  // process don't lose fields.
+  const key = cacheKeyFor(storageKey);
   oauth2Client.setCredentials(tokens);
+  let lastSaved = tokens;
   oauth2Client.on('tokens', (refreshed) => {
-    const merged = { ...tokens, ...refreshed };
-    saveToken(tokenPath, merged);
+    lastSaved = { ...lastSaved, ...refreshed };
+    saveToken(tokenPath, lastSaved);
   });
   _clientCache.set(key, oauth2Client);
 
-  console.log(`[calendar] Calendar connected for user ${sanitizeUserId(userId)}`);
-  return userId;
+  console.log(`[calendar] Calendar connected for ${sanitizeUserId(storageKey)}`);
+  return {
+    rawUserId: entry.rawUserId,
+    teamId: entry.teamId,
+    enterpriseId: entry.enterpriseId,
+    isEnterpriseInstall: entry.isEnterpriseInstall,
+    storageKey,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -425,11 +503,12 @@ export async function buildCalendarContext(userId) {
 /**
  * Check whether a user's Google Calendar is configured and connected.
  *
- * @param {string} [userId] - Slack user ID. Falsy checks the legacy global token.
+ * @param {string|object} [idOrContext] - Slack user ID, or a context object
+ *   { userId, teamId, enterpriseId }. Falsy checks the legacy global token.
  * @returns {boolean}
  */
-export function isCalendarConfigured(userId) {
-  return isConfigured() && existsSync(tokenPathFor(userId));
+export function isCalendarConfigured(idOrContext) {
+  return isConfigured() && existsSync(tokenPathFor(resolveStorageKey(idOrContext)));
 }
 
 

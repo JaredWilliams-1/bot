@@ -42,11 +42,19 @@ features:
       should_escape: false
 
 oauth_config:
+  # For MULTI-WORKSPACE distribution ("Add to Slack"): uncomment redirect_urls
+  # and replace <your-domain> with your public HTTPS domain. This must match the
+  # SLACK redirect, served by the bot at /slack/oauth_redirect (proxied by Caddy).
+  # Single-workspace installs do not need redirect_urls.
+  # redirect_urls:
+  #   - https://<your-domain>/slack/oauth_redirect
   scopes:
     bot:
       - app_mentions:read   # See @Claudia mentions in channels
+      - channels:history    # Read thread history in public channels (conversation context)
       - chat:write          # Reply in channels and threads
       - commands            # Receive the /connect-calendar slash command
+      - groups:history      # Read thread history in private channels (conversation context)
       - im:history          # Read direct messages sent to the bot
       - im:read             # Detect new DM conversations
       - im:write            # Open DM conversations
@@ -59,6 +67,8 @@ settings:
       - message.im          # Fires on direct messages to the bot
   interactivity:
     is_enabled: false
+  # Set org_deploy_enabled: true ONLY if you support org-wide (Enterprise Grid)
+  # installs. The installation store keys org installs on the enterprise id.
   org_deploy_enabled: false
   socket_mode_enabled: true
   token_rotation_enabled: false
